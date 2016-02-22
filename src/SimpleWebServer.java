@@ -11,9 +11,16 @@
  * 11
  *******************************************************************************/
 
-import com.sun.org.apache.xerces.internal.impl.dv.util.Base64;
+import sun.misc.BASE64Decoder;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Date;
@@ -28,8 +35,8 @@ public class SimpleWebServer {
     private static ServerSocket dServerSocket;
     // new - default log file
     private String logFileName = "log.log";
-    //new - file size limit in KB
-    private long sizeLimit = 10000;
+    //new - file size limit in byte
+    private long sizeLimit = 1000;
 
     //new -username and password for authentication
     private String username = "admin";
@@ -56,21 +63,29 @@ public class SimpleWebServer {
         pathname = pathname.replace("/", "");
         try {
             fw = new FileWriter(pathname);
-            String s = br.readLine();
-            while (s != null) {
-                fw.write(s);
-                s = br.readLine();
+
+            while (br.ready()) {
+                String s = br.readLine();
+                fw.write(s + "\n");
             }
             fw.close();
-            osw.write("HTTP/1.0 201 Created");
+            logEntry(logFileName, "Successfully save " + pathname + "\n");
+            osw.write("HTTP/1.0 201 Created\r\n");
         } catch (Exception e) {
-            osw.write("HTTP/1.0 500 Internal Server Error");
+            osw.write("HTTP/1.0 500 Internal Server Error\r\n");
+            logEntry(logFileName, "HTTP/1.0 500 Internal Server Error\n");
         }
     }
 
     public void logEntry(String filename, String record) throws IOException {
+        File file = new File(filename);
+        if (!file.exists()) {
+
+            file.createNewFile();
+        }
         FileWriter fw = new FileWriter(filename, true);
-        fw.write(getTimestamp() + " " + record);
+        fw.write(getTimestamp() + " " + record + "\n");
+        fw.flush();
         fw.close();
     }
 
@@ -93,6 +108,7 @@ public class SimpleWebServer {
         an HTTP error code. */
     public void processRequest(Socket s) throws Exception {
         /* Used to read data from the client. */
+
         BufferedReader br =
                 new BufferedReader(
                         new InputStreamReader(s.getInputStream()));
@@ -105,20 +121,24 @@ public class SimpleWebServer {
         String request = br.readLine();
 
         String temp = null;
+        String requestContent = "";
         boolean valid = false;
         while ((temp = br.readLine()) != null) {
 
             if (temp.isEmpty()) {
                 break;
             }
-            StringTokenizer stringTokenizer = new StringTokenizer(temp, ":");
-            if (stringTokenizer.hasMoreTokens()) {
+            request += temp;
+            if (!temp.isEmpty()) {
+                StringTokenizer stringTokenizer = new StringTokenizer(temp, ":");
+                if (stringTokenizer.hasMoreTokens()) {
 
-                String key = stringTokenizer.nextToken().trim();
-                String value = stringTokenizer.nextToken().trim();
+                    String key = stringTokenizer.nextToken().trim();
+                    String value = stringTokenizer.nextToken().trim();
 
-                if (key.startsWith("Authorization") && checkLogin(value)) {
-                    valid = true;
+                    if (key.startsWith("Authorization") && checkLogin(value)) {
+                        valid = true;
+                    }
                 }
             }
         }
@@ -127,6 +147,8 @@ public class SimpleWebServer {
             osw.write("HTTP/1.0 401 Not Authorized\r\n");
             osw.write("WWW-Authenticate: Basic\r\n");
             osw.write("\r\n");
+
+            logEntry(logFileName, "Attempt login failed");
             osw.close();
             return;
         }
@@ -151,8 +173,13 @@ public class SimpleWebServer {
             new Thread(new ServerWorker(osw, pathname, logFileName, br)).start();
         } else if (command.equals("PUT")) {
 
-            storeFile(br, osw, pathname); // new - store the file
+            BufferedReader br2 =
+                    new BufferedReader(
+                            new InputStreamReader(new ByteArrayInputStream(requestContent.getBytes())));
+
+            storeFile(br2, osw, pathname); // new - store the file
             osw.write("\r\n");
+            logEntry(logFileName, "PUT " + pathname);
             osw.close();
             return;
         } else {
@@ -161,7 +188,7 @@ public class SimpleWebServer {
                  does not implement the requested command. */
             //new - log the request
             msg = "HTTP/1.0 501 Not Implemented\n\n";
-            logEntry(msg, logFileName);
+            logEntry(logFileName, msg);
             osw.write(msg);
             osw.close();
         }
@@ -179,7 +206,7 @@ public class SimpleWebServer {
                 return false;
             }
             value = value.substring(5).trim();
-            byte[] credentialsData = Base64.decode(value);
+            byte[] credentialsData = new BASE64Decoder().decodeBuffer(value);
             String temp = new String(credentialsData);
             String[] s = temp.split(":");
             return username.equals(s[0]) && password.equals(s[1]);
@@ -270,6 +297,7 @@ public class SimpleWebServer {
         @Override
         public void run() {
             try {
+                logEntry(logFileName, "GET " + pathname);
                 serveFile(osw, pathname);
                 /* Close the connection to the client. */
                 osw.close();
